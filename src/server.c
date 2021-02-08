@@ -800,6 +800,10 @@ struct redisCommand redisCommandTable[] = {
      "read-only fast random @keyspace",
      0,NULL,1,1,1,0,0,0},
 
+    {"expiretime",expiretimeCommand,3,
+     "read-only fast random @keyspace",
+     0,NULL,1,1,1,0,0,0},
+
     {"persist",persistCommand,2,
      "write fast @keyspace",
      0,NULL,1,1,1,0,0,0},
@@ -2595,7 +2599,6 @@ void createSharedObjects(void) {
     shared.left = createStringObject("left",4);
     shared.right = createStringObject("right",5);
     shared.pxat = createStringObject("PXAT", 4);
-    shared.px = createStringObject("PX",2);
     shared.time = createStringObject("TIME",4);
     shared.retrycount = createStringObject("RETRYCOUNT",10);
     shared.force = createStringObject("FORCE",5);
@@ -2605,6 +2608,7 @@ void createSharedObjects(void) {
     shared.ping = createStringObject("ping",4);
     shared.setid = createStringObject("SETID",5);
     shared.keepttl = createStringObject("KEEPTTL",7);
+    shared.absttl = createStringObject("ABSTTL",6);
     shared.load = createStringObject("LOAD",4);
     shared.createconsumer = createStringObject("CREATECONSUMER",14);
     shared.getack = createStringObject("GETACK",6);
@@ -3534,6 +3538,7 @@ struct redisCommand *lookupCommandOrOriginal(sds name) {
 void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
                int flags)
 {
+    UNUSED(cmd);
     /* Propagate a MULTI request once we encounter the first command which
      * is a write command.
      * This way we'll deliver the MULTI/..../EXEC block as a whole and
@@ -3547,7 +3552,7 @@ void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
     serverAssert(!(areClientsPaused() && !server.client_pause_in_transaction));
 
     if (server.aof_state != AOF_OFF && flags & PROPAGATE_AOF)
-        feedAppendOnlyFile(cmd,dbid,argv,argc);
+        feedAppendOnlyFile(dbid,argv,argc);
     if (flags & PROPAGATE_REPL)
         replicationFeedSlaves(server.slaves,dbid,argv,argc);
 }

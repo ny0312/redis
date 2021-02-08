@@ -5085,7 +5085,7 @@ void dumpCommand(client *c) {
 
 /* RESTORE key ttl serialized-value [REPLACE] */
 void restoreCommand(client *c) {
-    long long ttl, lfu_freq = -1, lru_idle = -1, lru_clock = -1;
+    long long milliseconds, lfu_freq = -1, lru_idle = -1, lru_clock = -1;
     rio payload;
     int j, type, replace = 0, absttl = 0;
     robj *obj;
@@ -5132,9 +5132,9 @@ void restoreCommand(client *c) {
     }
 
     /* Check if the TTL value makes sense */
-    if (getLongLongFromObjectOrReply(c,c->argv[2],&ttl,NULL) != C_OK) {
+    if (getLongLongFromObjectOrReply(c,c->argv[2],&milliseconds,NULL) != C_OK) {
         return;
-    } else if (ttl < 0) {
+    } else if (milliseconds < 0) {
         addReplyError(c,"Invalid TTL value, must be >= 0");
         return;
     }
@@ -5159,8 +5159,8 @@ void restoreCommand(client *c) {
     if (replace)
         deleted = dbDelete(c->db,key);
 
-    if (ttl && !absttl) ttl+=mstime();
-    if (ttl && checkAlreadyExpired(ttl)) {
+    if (milliseconds && !absttl) milliseconds+=mstime();
+    if (milliseconds && checkAlreadyExpired(milliseconds)) {
         if (deleted) {
             rewriteClientCommandVector(c,2,shared.del,key);
             signalModifiedKey(c,c->db,key);
@@ -5174,8 +5174,16 @@ void restoreCommand(client *c) {
 
     /* Create the key and set the TTL if any */
     dbAdd(c->db,key,obj);
-    if (ttl) {
-        setExpire(c,c->db,key,ttl);
+    if (milliseconds) {
+        setExpire(c,c->db,key,milliseconds);
+        /* Propagate TTL as absolute timestamp */
+        robj *millisecondObj = createStringObjectFromLongLong(milliseconds);
+        rewriteClientCommandArgument(c,2,millisecondObj);
+        decrRefCount(millisecondObj);
+        /* If ABSTTL is not already specified, slap it at the end of the command arguments list */
+        if (!absttl) {
+            rewriteClientCommandArgument(c,c->argc,shared.absttl);
+        }
     }
     objectSetLRUOrLFU(obj,lfu_freq,lru_idle,lru_clock,1000);
     signalModifiedKey(c,c->db,key);

@@ -502,14 +502,14 @@ int checkAlreadyExpired(long long when) {
  * the argv[2] parameter. The basetime is always specified in milliseconds. */
 void expireGenericCommand(client *c, long long basetime, int unit) {
     robj *key = c->argv[1], *param = c->argv[2];
-    long long when; /* unix time in milliseconds when the key will expire. */
+    long long milliseconds; /* unix time in milliseconds when the key will expire. */
 
-    if (getLongLongFromObjectOrReply(c, param, &when, NULL) != C_OK)
+    if (getLongLongFromObjectOrReply(c, param, &milliseconds, NULL) != C_OK)
         return;
-    int negative_when = when < 0;
-    if (unit == UNIT_SECONDS) when *= 1000;
-    when += basetime;
-    if (((when < 0) && !negative_when) || ((when-basetime > 0) && negative_when)) {
+    int negative_milliseconds = milliseconds < 0;
+    if (unit == UNIT_SECONDS) milliseconds *= 1000;
+    milliseconds += basetime;
+    if (((milliseconds < 0) && !negative_milliseconds) || ((milliseconds-basetime > 0) && negative_milliseconds)) {
         /* EXPIRE allows negative numbers, but we can at least detect an
          * overflow by either unit conversion or basetime addition. */
         addReplyErrorFormat(c, "invalid expire time in %s", c->cmd->name);
@@ -521,7 +521,7 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
         return;
     }
 
-    if (checkAlreadyExpired(when)) {
+    if (checkAlreadyExpired(milliseconds)) {
         robj *aux;
 
         int deleted = server.lazyfree_lazy_expire ? dbAsyncDelete(c->db,key) :
@@ -537,8 +537,12 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
         addReply(c, shared.cone);
         return;
     } else {
-        setExpire(c,c->db,key,when);
+        setExpire(c,c->db,key,milliseconds);
         addReply(c,shared.cone);
+        /* Propagate as PEXPIREAT millisecond-timestamp */
+        robj *millisecondObj = createStringObjectFromLongLong(milliseconds);
+        rewriteClientCommandVector(c, 3, shared.pexpireat, key, millisecondObj);
+        decrRefCount(millisecondObj);
         signalModifiedKey(c,c->db,key);
         notifyKeyspaceEvent(NOTIFY_GENERIC,"expire",key,c->db->id);
         server.dirty++;
@@ -567,7 +571,7 @@ void pexpireatCommand(client *c) {
 }
 
 /* Implements TTL and PTTL */
-void ttlGenericCommand(client *c, int output_ms) {
+void ttlGenericCommand(client *c, int output_ms, int output_abs) {
     long long expire, ttl = -1;
 
     /* If the key does not exist at all, return -2 */
@@ -575,11 +579,12 @@ void ttlGenericCommand(client *c, int output_ms) {
         addReplyLongLong(c,-2);
         return;
     }
+
     /* The key exists. Return -1 if it has no expire, or the actual
      * TTL value otherwise. */
     expire = getExpire(c->db,c->argv[1]);
     if (expire != -1) {
-        ttl = expire-mstime();
+        ttl = output_abs ? expire : expire-mstime();
         if (ttl < 0) ttl = 0;
     }
     if (ttl == -1) {
@@ -591,12 +596,29 @@ void ttlGenericCommand(client *c, int output_ms) {
 
 /* TTL key */
 void ttlCommand(client *c) {
-    ttlGenericCommand(c, 0);
+    ttlGenericCommand(c, 0, 0);
 }
 
 /* PTTL key */
 void pttlCommand(client *c) {
-    ttlGenericCommand(c, 1);
+    ttlGenericCommand(c, 1, 0);
+}
+
+/* EXPIRETIME key TIME|PTIME */
+void expiretimeCommand(client *c) {
+    int output_ms = 0;
+
+    /* Only a third argument is allowed */
+    if (c->argc == 3 && !strcasecmp(c->argv[2]->ptr,"time")) {
+        output_ms = 0;
+    } else if (c->argc == 3 && !strcasecmp(c->argv[2]->ptr,"ptime")) {
+        output_ms = 1;
+    } else {
+        addReplyErrorObject(c,shared.syntaxerr);
+        return;
+    }
+
+    ttlGenericCommand(c, output_ms, 1);
 }
 
 /* PERSIST key */
